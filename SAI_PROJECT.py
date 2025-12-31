@@ -5,109 +5,137 @@ from security import sai_guard
 import uuid
 
 # --- [0. 시스템 초기화 및 보안] ---
-if "banned_ips" not in st.session_state: st.session_state.banned_ips = set()
 if "user" not in st.session_state: st.session_state.user = None
-if "chat_partner" not in st.session_state: st.session_state.chat_partner = None
-if "messages" not in st.session_state: st.session_state.messages = []
+if "chat_sessions" not in st.session_state: st.session_state.chat_sessions = {}
+if "current_session_id" not in st.session_state: st.session_state.current_session_id = None
 
 if sai_guard.is_banned():
-    st.error("🚫 보안 위협으로 인해 차단된 IP입니다.")
+    st.error("🚫 접근이 차단되었습니다.")
     st.stop()
 
 # --- [1. 설정 및 연결] ---
-st.set_page_config(page_title="SAI - 우리 사이 AI", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="SAI - 영구 저장 지원", layout="wide", page_icon="🤖")
 
 try:
     supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except Exception as e:
-    st.error("설정 오류: Secrets 보관함을 확인하세요.")
+except:
+    st.error("Secrets 설정 오류!")
     st.stop()
 
-# --- [2. 사이드바: 계정 관리] ---
+# --- [2. 서버에서 과거 대화 목록 불러오기] ---
+u_id = st.session_state.user.id if st.session_state.user else f"Guest_{sai_guard.get_remote_ip()}"
+
+# 앱 시작 시 한 번만 DB에서 세션 목록 로드
+if not st.session_state.chat_sessions:
+    try:
+        res = supabase.table("chat_history").select("session_id, char_name, instruction").eq("user_id", u_id).execute()
+        for item in res.data:
+            sid = item['session_id']
+            if sid not in st.session_state.chat_sessions:
+                st.session_state.chat_sessions[sid] = {
+                    "char_name": item['char_name'],
+                    "instruction": item['instruction'],
+                    "messages": [] # 메시지는 채팅창 클릭 시 로드
+                }
+    except: pass
+
+# --- [3. 사이드바: 대화 목록] ---
 with st.sidebar:
     st.title("🤖 SAI PROJECT")
-    st.caption("우리 사이를 잇는 AI 서비스")
+    st.subheader("📝 대화 기록 (서버 저장됨)")
     
+    for s_id, s_data in st.session_state.chat_sessions.items():
+        if st.button(f"💬 {s_data['char_name']}", key=f"s_{s_id}", use_container_width=True):
+            st.session_state.current_session_id = s_id
+            st.rerun()
+
+    if st.button("➕ 새 캐릭터 찾기", use_container_width=True):
+        st.session_state.current_session_id = None
+        st.rerun()
+
+    st.write("---")
     if st.session_state.user is None:
-        st.write("---")
-        with st.expander("🔐 로그인 / 회원가입"):
+        with st.expander("🔐 로그인"):
             email = st.text_input("이메일")
-            pw = st.text_input("비밀번호", type="password")
-            c1, c2 = st.columns(2)
-            if c1.button("로그인", use_container_width=True):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": pw})
-                    st.session_state.user = res.user
-                    st.rerun()
-                except: st.error("정보 오류")
-            if c2.button("회원가입", use_container_width=True):
-                try: supabase.auth.sign_up({"email": email, "password": pw})
-                except: st.error("가입 실패")
+            pw = st.text_input("비번", type="password")
+            if st.button("로그인"):
+                res = supabase.auth.sign_in_with_password({"email": email, "password": pw})
+                st.session_state.user = res.user
+                st.rerun()
     else:
         st.success(f"✅ {st.session_state.user.email}")
         if st.button("로그아웃"):
             supabase.auth.sign_out()
             st.session_state.user = None
+            st.session_state.chat_sessions = {}
             st.rerun()
 
-# --- [3. 메인 화면: 로고 및 공지사항] ---
+# --- [4. 메인 콘텐츠] ---
 st.title("🌐 SAI : 우리 사이 AI")
+st.info("💡 모든 대화는 서버에 영구 저장되어 나중에도 이어갈 수 있습니다.")
 
-# [공지사항 섹션] - 텍스트로 깔끔하게 구성
-with st.container():
-    st.markdown("### 📢 SAI 공지사항")
-    notice_text = """
-    * **[업데이트]** 캐릭터 제작 시 이미지 업로드 및 제작자 코멘트 기능이 추가되었습니다! 📸
-    * **[안내]** 로그인 없이도 모든 기능을 'Guest'로 자유롭게 이용하실 수 있습니다. 🔓
-    * **[매너]** 건전한 커뮤니티를 위해 비속어 및 악성 게시글은 보안 시스템에 의해 자동 차단될 수 있습니다. 🛡️
-    """
-    st.info(notice_text)
-
-st.write("---") # 구분선
-
-# --- [4. 메인 기능 탭] ---
 tabs = st.tabs(["🔥 트렌드", "💬 채팅창", "📸 이미지", "📝 커뮤니티", "🛠️ 캐릭터 제작"])
 
-# [탭 1: 트렌드]
+# [탭 1: 트렌드 - 캐릭터 선택]
 with tabs[0]:
-    st.subheader("인기 AI 캐릭터")
     chars = supabase.table("sai_characters").select("*").execute().data
-    if not chars:
-        st.write("생성된 캐릭터가 없습니다. '캐릭터 제작' 탭에서 첫 캐릭터를 만들어보세요!")
-    else:
-        cols = st.columns(3)
-        for i, char in enumerate(chars):
-            with cols[i % 3]:
-                if char.get('image_url'): st.image(char['image_url'], use_container_width=True)
-                st.info(f"**{char['name']}**")
-                st.write(char['description'])
-                if char.get('creator_comment'): st.caption(f"💭 {char['creator_comment']}")
-                if st.button("대화하기", key=f"c_{char['id']}"):
-                    st.session_state.chat_partner = char
-                    st.session_state.messages = []
-                    st.success(f"'{char['name']}'와 연결됨!")
+    cols = st.columns(3)
+    for i, char in enumerate(chars):
+        with cols[i % 3]:
+            if char.get('image_url'): st.image(char['image_url'], use_container_width=True)
+            st.info(f"**{char['name']}**")
+            if st.button("대화 시작", key=f"new_{char['id']}"):
+                new_id = str(uuid.uuid4())
+                st.session_state.chat_sessions[new_id] = {
+                    "char_name": char['name'], "instruction": char['instruction'], "messages": []
+                }
+                st.session_id = new_id
+                st.session_state.current_session_id = new_id
+                st.rerun()
 
-# [탭 2: 채팅창]
+# [탭 2: 채팅창 - 서버 연동]
 with tabs[1]:
-    if not st.session_state.chat_partner:
-        st.warning("먼저 '트렌드' 탭에서 대화할 캐릭터를 선택해 주세요.")
+    sid = st.session_state.current_session_id
+    if not sid:
+        st.warning("사이드바에서 대화를 선택하세요.")
     else:
-        cp = st.session_state.chat_partner
-        st.subheader(f"💬 {cp['name']}와 대화 중")
-        for m in st.session_state.messages:
-            with st.chat_message(m["role"]): st.write(m["content"])
-            
-        if prompt := st.chat_input("메시지를 입력하세요..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.write(prompt)
-            
-            # Gemini AI 응답
-            model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=cp['instruction'])
-            response = model.generate_content(prompt)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
-            st.rerun()
+        chat = st.session_state.chat_sessions[sid]
+        st.subheader(f"💬 {chat['char_name']}와의 대화")
 
+        # DB에서 메시지 내용 불러오기 (해당 세션에 메시지가 비어있을 때만)
+        if not chat["messages"]:
+            res = supabase.table("chat_history").select("*").eq("session_id", sid).order("created_at").execute()
+            chat["messages"] = [{"role": r["role"], "content": r["content"]} for r in res.data]
+
+        for m in chat["messages"]:
+            with st.chat_message(m["role"]): st.write(m["content"])
+
+        if prompt := st.chat_input("메시지 입력..."):
+            # 1. 유저 메시지 표시 및 DB 저장
+            chat["messages"].append({"role": "user", "content": prompt})
+            supabase.table("chat_history").insert({
+                "user_id": u_id, "session_id": sid, "char_name": chat['char_name'],
+                "role": "user", "content": prompt, "instruction": chat['instruction']
+            }).execute()
+            st.rerun()
+            
+            # 2. AI 응답 생성
+            try:
+                model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=chat['instruction'])
+                response = model.generate_content(prompt)
+                ai_text = response.text
+                
+                # 3. AI 응답 DB 저장
+                supabase.table("chat_history").insert({
+                    "user_id": u_id, "session_id": sid, "char_name": chat['char_name'],
+                    "role": "assistant", "content": ai_text, "instruction": chat['instruction']
+                }).execute()
+                st.rerun()
+            except Exception as e:
+                st.error(f"AI 오류: {e}")
+
+# [나머지 탭 (이미지, 커뮤니티, 제작)은 이전 코드와 동일하게 유지]
 # [탭 3: 이미지 게시판]
 with tabs[2]:
     st.header("📸 이미지 공유")
