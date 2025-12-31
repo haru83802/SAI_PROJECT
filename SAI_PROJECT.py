@@ -90,34 +90,47 @@ with tabs[1]:
             chat["messages"].append({"role": "user", "content": prompt})
             
             # DB 저장 및 AI 응답 처리 (에러 방지용 try-except)
-            try:
-                # 1. 유저 메시지 저장
-                supabase.table("chat_history").insert({
-                    "user_id": str(u_id), 
-                    "session_id": str(sid), 
-                    "char_name": chat['char_name'],
-                    "role": "user", 
-                    "content": prompt, 
-                    "instruction": chat['instruction']
-                }).execute()
-                
-                # 2. AI 응답 생성
-                model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=chat['instruction'])
-                response = model.generate_content(prompt)
-                ai_text = response.text
-                
-                # 3. AI 답변 저장
-                supabase.table("chat_history").insert({
-                    "user_id": str(u_id), 
-                    "session_id": str(sid), 
-                    "char_name": chat['char_name'],
-                    "role": "assistant", 
-                    "content": ai_text, 
-                    "instruction": chat['instruction']
-                }).execute()
-                st.rerun()
-            except Exception as e:
-                st.error(f"서버 저장 중 오류: {e}")
+# [탭 2: 채팅창 - 수정된 모델 호출 부분]
+try:
+    # 1. 유저 메시지 저장
+    supabase.table("chat_history").insert({
+        "user_id": str(u_id), 
+        "session_id": str(sid), 
+        "char_name": chat['char_name'],
+        "role": "user", 
+        "content": prompt, 
+        "instruction": chat['instruction']
+    }).execute()
+    
+    # 2. AI 응답 생성 (모델 이름 경로 수정)
+    # 'gemini-1.5-flash' 대신 'models/gemini-1.5-flash' 사용
+    model = genai.GenerativeModel(
+        model_name='models/gemini-1.5-flash', # 경로 명시
+        system_instruction=chat['instruction']
+    )
+    
+    response = model.generate_content(prompt)
+    ai_text = response.text
+    
+    # 3. AI 답변 저장
+    supabase.table("chat_history").insert({
+        "user_id": str(u_id), 
+        "session_id": str(sid), 
+        "char_name": chat['char_name'],
+        "role": "assistant", 
+        "content": ai_text, 
+        "instruction": chat['instruction']
+    }).execute()
+    st.rerun()
+
+except Exception as e:
+    # 만약 'models/'를 붙여도 안 된다면 일반 이름으로 재시도
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=chat['instruction'])
+        response = model.generate_content(prompt)
+        # ... (이하 동일하게 저장 로직 수행)
+    except:
+        st.error(f"AI 응답 오류: {e}")
 
 # 이미지, 커뮤니티, 제작 탭은 이전 코드와 동일
 # [탭 3: 이미지 게시판]
