@@ -8,9 +8,9 @@ from streamlit_javascript import st_javascript
 st.set_page_config(page_title="SAI - 우리 사이 AI", layout="wide", page_icon="🤖")
 
 # API 키 (본인의 키로 반드시 교체!)
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_KEY = "your-key"
-GEMINI_API_KEY = "your-gemini-key"
+SUPABASE_URL = "https://wkkpssqhumrzaotnkdse.supabase.co"
+SUPABASE_KEY = "sb_publishable_L7CYoxdI5y8LCnYzcKvHAQ__3CVUYwH"
+GEMINI_API_KEY = "AIzaSyDNpEi4mhiWbGpN8ef-Dv50PiX7am1n7xw"
 
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
