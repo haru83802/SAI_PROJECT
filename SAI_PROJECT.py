@@ -65,8 +65,19 @@ tabs = st.tabs(["🏠 홈", "🔥 트렌드", "🛠️ 제작", "💬 채팅"])
 
 # --- TAB 1: 홈 ---
 with tabs[0]:
-    st.header("나와 AI 사이, SAI")
-    st.info("📢 직접 캐릭터를 제작하고 30,000자 페르소나와 대화해보세요.")
+    st.header("📢 SAI 공지사항")
+    try:
+        # DB에서 활성화된(is_active=True) 공지만 가져오기
+        notices = supabase.table("sai_notices").select("*").eq("is_active", True).order("created_at", desc=True).execute()
+        
+        if notices.data:
+            for n in notices.data:
+                with st.expander(f"📌 {n['title']} ({n['created_at'][:10]})"):
+                    st.write(n['content'])
+        else:
+            st.write("현재 등록된 공지가 없습니다.")
+    except Exception as e:
+        st.error(f"공지를 불러오는 중 오류 발생: {e}")
 
 # --- TAB 2: 트렌드 (제작된 캐릭터 목록 불러오기) ---
 with tabs[1]:
