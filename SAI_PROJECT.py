@@ -1,25 +1,26 @@
 import streamlit as st
 from supabase import create_client, Client
-import google.generativeai as genai
+from google import genai  # 최신 라이브러리로 교체
 from security import sai_guard
 import uuid
 
-# --- [0. 초기화] ---
+# --- [0. 시스템 초기화] ---
 if "user" not in st.session_state: st.session_state.user = None
 if "chat_sessions" not in st.session_state: st.session_state.chat_sessions = {}
 if "current_session_id" not in st.session_state: st.session_state.current_session_id = None
 
 # --- [1. 설정 및 연결] ---
-st.set_page_config(page_title="SAI - 통합 시스템", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="SAI - 최신 엔진 통합본", layout="wide", page_icon="🤖")
 
 try:
     supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # 최신 google-genai 클라이언트 설정
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
 except Exception as e:
-    st.error(f"설정 오류: Secrets를 확인하세요. ({e})")
+    st.error(f"연결 오류: {e}")
     st.stop()
 
-# --- [2. 유저 식별 및 데이터 로드] ---
+# --- [2. 사용자 식별 및 영구 데이터 로드] ---
 u_id = st.session_state.user.id if st.session_state.user else f"Guest_{sai_guard.get_remote_ip()}"
 
 if not st.session_state.chat_sessions:
@@ -37,8 +38,8 @@ if not st.session_state.chat_sessions:
 with st.sidebar:
     st.title("🤖 SAI PROJECT")
     st.subheader("⚙️ AI 모델 엔진")
-    # 404 에러 방지를 위한 표준 명칭
-    selected_model_name = st.selectbox("엔진 선택", ["gemini-1.5-flash", "gemini-1.5-pro"])
+    # 최신 엔진 명칭 (v1beta가 아닌 정식 v1 경로 사용)
+    selected_model = st.selectbox("엔진 선택", ["gemini-1.5-flash", "gemini-1.5-pro"])
     
     st.divider()
     st.subheader("📝 나의 대화")
@@ -50,12 +51,12 @@ with st.sidebar:
         st.session_state.current_session_id = None
         st.rerun()
 
-# --- [4. 메인 콘텐츠 탭] ---
+# --- [4. 메인 콘텐츠] ---
 tabs = st.tabs(["🔥 트렌드", "💬 채팅창", "📸 이미지", "📝 커뮤니티", "🛠️ 캐릭터 제작"])
 
-# [탭 1: 트렌드 - 캐릭터 선택]
+# [탭 1: 캐릭터 선택]
 with tabs[0]:
-    st.subheader("대화하고 싶은 AI를 선택하세요")
+    st.subheader("대화할 AI를 선택하세요")
     try:
         chars = supabase.table("sai_characters").select("*").execute().data
         cols = st.columns(3)
@@ -70,22 +71,20 @@ with tabs[0]:
                     }
                     st.session_state.current_session_id = new_id
                     st.rerun()
-    except: st.warning("캐릭터 목록을 불러올 수 없습니다.")
+    except: st.warning("목록을 불러올 수 없습니다.")
 
-# [탭 2: 채팅창 - 핵심 해결 로직]
+# [탭 2: 채팅창 - 최신 google-genai 엔진 적용]
 with tabs[1]:
     sid = st.session_state.current_session_id
     if not sid:
-        st.warning("먼저 캐릭터를 골라주세요.")
+        st.warning("캐릭터를 골라주세요.")
     else:
         chat = st.session_state.chat_sessions[sid]
-        st.subheader(f"💬 {chat['char_name']} ({selected_model_name})")
+        st.subheader(f"💬 {chat['char_name']} ({selected_model})")
 
         # 실시간 메시지 로드
-        try:
-            res = supabase.table("chat_history").select("role, content").eq("session_id", sid).order("created_at").execute()
-            chat["messages"] = res.data
-        except: pass
+        res = supabase.table("chat_history").select("role, content").eq("session_id", sid).order("created_at").execute()
+        chat["messages"] = res.data
 
         for m in chat["messages"]:
             with st.chat_message(m["role"]): st.write(m["content"])
@@ -99,13 +98,15 @@ with tabs[1]:
                     "role": "user", "content": prompt, "instruction": chat['instruction']
                 }).execute()
                 
-                # 2. AI 호출 (404 방지 강제 경로 설정)
-                ai_text = ""
-                # 라이브러리 버전에 따라 'models/'가 필수일 수 있음
-                model_id = f"models/{selected_model_name}"
-                
-                model = genai.GenerativeModel(model_name=model_id, system_instruction=chat['instruction'])
-                response = model.generate_content(prompt)
+                # 2. 최신 SDK 방식으로 AI 호출 (핵심 해결 부분)
+                response = client.models.generate_content(
+                    model=selected_model,
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=chat['instruction'],
+                        temperature=0.7
+                    )
+                )
                 ai_text = response.text
                 
                 # 3. AI 응답 저장
@@ -115,8 +116,7 @@ with tabs[1]:
                 }).execute()
                 st.rerun()
             except Exception as e:
-                st.error(f"⚠️ 연결 오류: {e}")
-                st.info("API 키 권한이나 할당량을 확인하세요.")
+                st.error(f"⚠️ 최신 엔진 호출 실패: {e}")
 
 # [탭 3: 이미지 갤러리]
 with tabs[2]:
@@ -125,53 +125,43 @@ with tabs[2]:
         img_f = st.file_uploader("사진 선택", type=['jpg', 'png'])
         img_d = st.text_input("설명")
         if st.button("업로드") and img_f:
-            try:
-                fn = f"{uuid.uuid4()}.png"
-                supabase.storage.from_("images").upload(fn, img_f.read())
-                url = supabase.storage.from_("images").get_public_url(fn)
-                supabase.table("posts").insert({"user_id": u_id, "img_url": url, "description": img_d}).execute()
-                st.rerun()
-            except: st.error("Storage 버킷 'images'가 공개 상태인지 확인하세요.")
+            fn = f"{uuid.uuid4()}.png"
+            supabase.storage.from_("images").upload(fn, img_f.read())
+            url = supabase.storage.from_("images").get_public_url(fn)
+            supabase.table("posts").insert({"user_id": u_id, "img_url": url, "description": img_d}).execute()
+            st.rerun()
     
-    try:
-        posts = supabase.table("posts").select("*").order("created_at", desc=True).execute().data
-        cols = st.columns(3)
-        for idx, p in enumerate(posts or []):
-            with cols[idx % 3]:
-                st.image(p['img_url'], use_container_width=True)
-                st.caption(p['description'])
-    except: st.write("공유된 이미지가 없습니다.")
+    posts = supabase.table("posts").select("*").order("created_at", desc=True).execute().data
+    cols = st.columns(3)
+    for idx, p in enumerate(posts or []):
+        with cols[idx % 3]:
+            st.image(p['img_url'], use_container_width=True)
+            st.caption(p['description'])
 
 # [탭 4: 커뮤니티]
 with tabs[3]:
     st.header("📝 자유 게시판")
-    with st.form("comm_form", clear_on_submit=True):
-        txt = st.text_area("내용을 입력하세요")
+    with st.form("comm_f", clear_on_submit=True):
+        txt = st.text_area("내용 입력")
         if st.form_submit_button("등록"):
             if txt.strip():
-                try:
-                    author = st.session_state.user.email if st.session_state.user else "익명"
-                    supabase.table("comments").insert({"user_email": author, "content": txt}).execute()
-                    st.rerun()
-                except: st.error("게시판 저장 실패")
+                author = st.session_state.user.email if st.session_state.user else "익명"
+                supabase.table("comments").insert({"user_email": author, "content": txt}).execute()
+                st.rerun()
     
-    try:
-        comments = supabase.table("comments").select("*").order("created_at", desc=True).execute().data
-        for c in comments or []:
-            st.write(f"**{c['user_email']}**: {c['content']}")
-            st.divider()
-    except: st.write("글이 없습니다.")
+    comments = supabase.table("comments").select("*").order("created_at", desc=True).execute().data
+    for c in comments or []:
+        st.write(f"**{c['user_email']}**: {c['content']}")
+        st.divider()
 
 # [탭 5: 캐릭터 제작]
 with tabs[4]:
     st.header("🛠️ 캐릭터 제작")
-    with st.form("make_form"):
+    with st.form("make_f"):
         name = st.text_input("이름")
-        desc = st.text_input("한 줄 소개")
-        inst = st.text_area("성격 지침")
+        desc = st.text_input("소개")
+        inst = st.text_area("지침")
         if st.form_submit_button("제작"):
             if name and inst:
-                try:
-                    supabase.table("sai_characters").insert({"name": name, "description": desc, "instruction": inst}).execute()
-                    st.success(f"{name} 캐릭터 제작 완료!")
-                except: st.error("DB 권한 오류 (RLS를 해제하세요)")
+                supabase.table("sai_characters").insert({"name": name, "description": desc, "instruction": inst}).execute()
+                st.success(f"{name} 캐릭터 제작 완료!")
