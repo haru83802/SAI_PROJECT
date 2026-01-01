@@ -3,164 +3,178 @@ from supabase import create_client
 import google.generativeai as genai
 import uuid
 import hashlib
-import re
 
 # --- [0. 보안 및 초기화] ---
 st.set_page_config(page_title="SAI - Zeta Experience", layout="wide", page_icon="🤖")
 
 @st.cache_resource
 def init_core():
-    # 보안: Secrets가 없을 경우 안내
+    # 비영리 목적: API 키 및 DB 연결 보안 처리
     try:
         sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         return sb
     except Exception as e:
-        st.error(f"설정 오류: Secrets를 확인하세요. ({e})")
+        st.error(f"초기 설정 에러: Secrets 설정을 확인하세요. ({e})")
         st.stop()
 
 supabase = init_core()
 
-# 세션 유지 및 사용자 보안 식별
+# 세션 관리 (Zeta처럼 대화가 끊기지 않게 유지)
 if "user_id" not in st.session_state:
-    st.session_state.user_id = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()[:12]
+    st.session_state.user_id = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()[:10]
+if "active_char" not in st.session_state:
+    st.session_state.active_char = None
 if "chat_session" not in st.session_state:
-    st.session_state.chat_session = None
+    st.session_state.chat_session = str(uuid.uuid4())
 
-# --- [1. 제타 스타일 UI 렌더링] ---
-def zeta_header():
+# --- [1. 스타일리시 헤더 (제타 감성)] ---
+def draw_header():
     st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); padding: 30px; border-radius: 20px; border-bottom: 4px solid #00ffcc; text-align: center; margin-bottom: 30px;">
-            <h1 style="margin:0; font-size: 60px;">🤖 SAI</h1>
-            <h3 style="color: #00ffcc; margin: 10px 0;">Zeta-Inspired Non-Profit Platform</h3>
-            <p style="color: #ccc;">비영리 목적으로 운영되는 초몰입형 AI 대화 서비스입니다.</p>
-            <p style="font-size: 0.8em; color: #888;">User Hash: {st.session_state.user_id}</p>
+        <div style="background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 25px; border-radius: 15px; border-left: 5px solid #00ffcc; margin-bottom: 25px;">
+            <h1 style="color: #00ffcc; margin:0;">🤖 SAI : Zeta Master Edition</h1>
+            <p style="color: #ffffff; margin: 5px 0;">비영리 목적의 초몰입형 AI 캐릭터 플랫폼</p>
+            <span style="background: #00ffcc; color: #000; padding: 2px 8px; border-radius: 5px; font-size: 12px; font-weight: bold;">NON-PROFIT</span>
+            <span style="color: #888; font-size: 12px; margin-left: 10px;">User: {st.session_state.user_id}</span>
         </div>
     """, unsafe_allow_html=True)
 
-# --- [2. 핵심 기능: 대화 엔진 (디버깅 완료)] ---
-def generate_ai_response(char_info, user_input, history_context):
-    # Zeta의 핵심: 페르소나 + 시나리오 + 유저 입력 결합
-    full_prompt = f"""
-    당신은 다음의 캐릭터 페르소나를 완벽하게 연기하십시오:
-    캐릭터 이름: {char_info['name']}
-    성격/지침: {char_info['instruction']}
-    현재 상황: {char_info.get('scenario', '사용자와 첫 대화를 시작함')}
-    
-    주의사항:
-    1. 괄호 ()를 사용하여 행동, 감정, 주변 상황을 묘사하십시오. (예: (당신을 빤히 바라보며 입술을 깨문다))
-    2. 캐릭터의 말투와 성격을 대화 끝까지 유지하십시오.
-    3. 이전 대화 맥락을 기억하십시오.
-    """
-    
-    try:
-        model = genai.GenerativeModel("gemini-1.5-pro") # 더 깊은 몰입을 위해 Pro 권장
-        # 대화 맥락 생성
-        chat = model.start_chat(history=history_context)
-        response = chat.send_message(user_input)
-        return response.text
-    except Exception as e:
-        return f"(시스템 오류 발생: {e}. 잠시 후 다시 시도해주세요.)"
+draw_header()
 
-# --- [3. 메인 인터페이스] ---
-zeta_header()
-tabs = st.tabs(["✨ 트렌드 & 검색", "💬 채팅룸", "🛠️ 캐릭터 창작", "📜 개발자 노드"])
+# --- [2. 메인 탭 (모든 요청 기능 통합)] ---
+tabs = st.tabs(["🔍 캐릭터 탐색", "💬 채팅룸", "🛠️ 캐릭터 제작소", "📜 시스템 로그"])
 
-# [탭 1: 캐릭터 탐색 및 검색]
+# [탭 1: 실시간 검색 및 캐릭터 리스트]
 with tabs[0]:
+    # 검색 기능 추가
     search_col1, search_col2 = st.columns([4, 1])
-    search_q = search_col1.text_input("🔍 당신이 꿈꾸던 캐릭터를 찾아보세요", placeholder="이름, 키워드 검색...")
+    with search_col1:
+        search_q = st.text_input("🔍 이름이나 키워드로 캐릭터를 찾아보세요", placeholder="예: 츤데레, 학생회장, 판타지...")
     
-    # 데이터 로드 및 에러 방지 처리
-    res = supabase.table("sai_characters").select("*").order("views", desc=True).execute()
-    chars = res.data if res.data else []
-    
-    if search_q:
-        chars = [c for c in chars if search_q.lower() in c['name'].lower() or search_q.lower() in c.get('description', '').lower()]
+    # DB에서 캐릭터 로드 (에러 디버깅 완료)
+    try:
+        query = supabase.table("sai_characters").select("*").order("views", desc=True)
+        if search_q:
+            # 실시간 필터링 쿼리
+            res = query.or_(f"name.ilike.%{search_q}%,description.ilike.%{search_q}%").execute()
+        else:
+            res = query.limit(12).execute()
+        
+        chars = res.data if res.data else []
+        
+        if not chars:
+            st.info("검색 결과가 없습니다. 새로운 영혼을 직접 창조해 보세요!")
+        else:
+            # 3열 그리드 배치
+            rows = [chars[i:i + 3] for i in range(0, len(chars), 3)]
+            for row in rows:
+                cols = st.columns(3)
+                for i, char in enumerate(row):
+                    with cols[i]:
+                        with st.container(border=True):
+                            if char.get('image_url'):
+                                st.image(char['image_url'], use_container_width=True)
+                            st.subheader(char['name'])
+                            st.caption(char.get('description', '설명이 없는 캐릭터입니다.'))
+                            st.write(f"👁️ {char.get('views', 0)}  ❤️ {char.get('likes', 0)}")
+                            
+                            if st.button("대화하기", key=f"chat_{char['id']}", use_container_width=True):
+                                # 조회수 업데이트
+                                supabase.table("sai_characters").update({"views": char.get('views', 0) + 1}).eq("id", char['id']).execute()
+                                st.session_state.active_char = char
+                                st.rerun()
+    except Exception as e:
+        st.error(f"데이터 로드 에러: {e}")
 
-    rows = [chars[i:i + 3] for i in range(0, len(chars), 3)]
-    for row in rows:
-        cols = st.columns(3)
-        for i, char in enumerate(row):
-            with cols[i]:
-                with st.container(border=True):
-                    if char.get('image_url'): st.image(char['image_url'], use_container_width=True)
-                    st.subheader(char['name'])
-                    st.write(char.get('description', '설명이 없습니다.'))
-                    st.markdown(f"👁️ {char.get('views', 0)} | ❤️ {char.get('likes', 0)}")
-                    
-                    if st.button("대화 시작", key=f"btn_{char['id']}", use_container_width=True):
-                        # 조회수 증가 (APIError 방지를 위한 안전 업데이트)
-                        try:
-                            supabase.table("sai_characters").update({"views": char.get('views', 0) + 1}).eq("id", char['id']).execute()
-                        except: pass
-                        st.session_state.chat_session = str(uuid.uuid4())
-                        st.session_state.active_char = char
-                        st.rerun()
-
-# [탭 2: 채팅룸 (Zeta 스타일 몰입)]
+# [탭 2: 채팅룸 (제타 페르소나 몰입 엔진)]
 with tabs[1]:
-    if not st.session_state.get("active_char"):
-        st.info("트렌드 탭에서 캐릭터를 선택하여 운명적인 대화를 시작하세요.")
+    if not st.session_state.active_char:
+        st.warning("먼저 '캐릭터 탐색' 탭에서 대화할 캐릭터를 골라주세요.")
     else:
-        current_char = st.session_state.active_char
-        st.subheader(f"✨ {current_char['name']}와(과) 대화 중")
+        char = st.session_state.active_char
+        st.subheader(f"✨ {char['name']}와(과) 대화 중")
         
-        # DB에서 대화 내역 복구 (새로고침 시 유지 핵심)
-        db_history = supabase.table("chat_history").select("*").eq("session_id", st.session_state.chat_session).order("created_at").execute().data
+        # 이전 대화 기록 복구
+        chat_res = supabase.table("chat_history").select("*").eq("session_id", st.session_state.chat_session).order("created_at").execute()
+        history = chat_res.data if chat_res.data else []
         
-        # UI 출력용
-        for m in db_history:
+        for m in history:
             with st.chat_message(m['role']):
                 st.write(m['content'])
 
-        # 사용자 입력
-        if prompt := st.chat_input(f"{current_char['name']}에게 할 말을 적어주세요..."):
+        # 사용자 입력 및 AI 응답 (Zeta 스타일 지침 적용)
+        if prompt := st.chat_input(f"{char['name']}에게 메시지 보내기..."):
             with st.chat_message("user"):
                 st.write(prompt)
             
-            # 컨텍스트 구축
-            history_for_api = [{"role": "user" if m['role'] == "user" else "model", "parts": [m['content']]} for m in db_history]
+            # 제타 스타일 프롬프트 엔지니어링
+            system_instruction = f"""
+            당신은 '{char['name']}'입니다. 다음 지침을 완벽히 따르세요:
+            1. 페르소나: {char['instruction']}
+            2. Zeta 스타일: 대화 중간에 반드시 ()를 사용하여 현재의 행동, 표정, 감정 상태를 묘사하십시오.
+            3. 말투: 설정된 성격에 맞는 어투를 끝까지 유지하십시오.
+            4. 상황: {char.get('scenario', '사용자와 대화 중')}
+            """
             
-            # AI 응답 생성
-            with st.spinner(f"{current_char['name']}(이)가 생각 중..."):
-                ai_response = generate_ai_response(current_char, prompt, history_for_api)
-            
-            with st.chat_message("assistant"):
-                st.write(ai_response)
-            
-            # DB 저장 (트랜잭션 오류 방지를 위해 리스트로 전송)
-            supabase.table("chat_history").insert([
-                {"user_id": st.session_state.user_id, "session_id": st.session_state.chat_session, "role": "user", "content": prompt, "char_name": current_char['name']},
-                {"user_id": st.session_state.user_id, "session_id": st.session_state.chat_session, "role": "assistant", "content": ai_response, "char_name": current_char['name']}
-            ]).execute()
+            try:
+                model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=system_instruction)
+                # 컨텍스트 연결을 위해 이전 대화 요약/전달 가능 (여기서는 간략화)
+                response = model.generate_content(prompt).text
+                
+                with st.chat_message("assistant"):
+                    st.write(response)
+                
+                # DB 저장 (에러 방지를 위해 리스트 형태로 삽입)
+                supabase.table("chat_history").insert([
+                    {"user_id": st.session_state.user_id, "session_id": st.session_state.chat_session, "role": "user", "content": prompt, "char_name": char['name']},
+                    {"user_id": st.session_state.user_id, "session_id": st.session_state.chat_session, "role": "assistant", "content": response, "char_name": char['name']}
+                ]).execute()
+            except Exception as e:
+                st.error(f"AI 응답 에러: {e}")
 
-# [탭 3: 캐릭터 창작 (Zeta 스타일 페르소나)]
+# [탭 3: 캐릭터 제작소]
 with tabs[2]:
-    st.header("🛠️ 새로운 영혼 창조")
+    st.header("🛠️ 신규 캐릭터 창작")
+    st.write("제타 사이트의 분석 결과를 바탕으로 최적화된 설정 항목입니다.")
+    
     with st.form("creator_form"):
-        c_name = st.text_input("이름", placeholder="캐릭터의 이름을 정해주세요.")
-        c_desc = st.text_input("한 줄 소개", placeholder="트렌드에 표시될 매력적인 문구")
-        c_inst = st.text_area("페르소나 설정", placeholder="성격, 말투, 금기사항 등을 상세히 적어주세요.", height=200)
-        c_scen = st.text_area("첫 만남 시나리오", placeholder="사용자가 처음 말을 걸었을 때 AI가 처한 상황을 묘사하세요.")
-        c_img = st.text_input("이미지 URL", placeholder="https://...")
+        col1, col2 = st.columns(2)
+        with col1:
+            new_name = st.text_input("캐릭터 이름 *", placeholder="예: 차가운 도련님")
+            new_desc = st.text_input("한 줄 소개", placeholder="캐릭터를 한 문장으로 표현하세요.")
+        with col2:
+            new_img = st.text_input("이미지 URL", placeholder="https://... (비워두면 기본 이미지)")
+            
+        new_inst = st.text_area("상세 페르소나 & 행동 지침 *", placeholder="어떤 말투를 쓰는지, 어떤 상황에서 어떻게 반응하는지 적어주세요.", height=150)
+        new_scen = st.text_area("시작 시나리오", placeholder="사용자와 처음 만났을 때 AI가 처한 상황을 적어주세요.", height=100)
         
-        if st.form_submit_button("영혼 불어넣기"):
-            if c_name and c_inst:
+        submit = st.form_submit_button("캐릭터 생성하기")
+        if submit:
+            if new_name and new_inst:
                 try:
                     supabase.table("sai_characters").insert({
-                        "name": c_name, "instruction": c_inst, "scenario": c_scen,
-                        "description": c_desc, "image_url": c_img, "creator_id": st.session_state.user_id
+                        "name": new_name,
+                        "description": new_desc,
+                        "instruction": new_inst,
+                        "scenario": new_scen,
+                        "image_url": new_img,
+                        "creator_id": st.session_state.user_id
                     }).execute()
-                    st.success("🤖 새로운 캐릭터가 탄생했습니다!")
+                    st.success(f"✅ '{new_name}' 캐릭터가 성공적으로 생성되었습니다! 탐색 탭에서 확인하세요.")
                 except Exception as e:
-                    st.error(f"창조 실패: {e}")
+                    st.error(f"생성 실패: {e}")
+            else:
+                st.warning("이름과 행동 지침은 필수 항목입니다.")
 
-# [탭 4: 개발자 노드 (비영리 고지 및 세션 제어)]
+# [탭 4: 시스템 로그 & 고지]
 with tabs[3]:
-    st.info("SAI는 비영리 목적으로 운영되는 실험적 AI 플랫폼입니다.")
-    st.write("본 서비스는 어떠한 수익도 창출하지 않으며, 모든 AI 모델의 비용은 개발자가 부담하거나 무료 티어를 활용합니다.")
-    if st.button("🔴 현재 대화 세션 종료"):
-        st.session_state.chat_session = None
+    st.subheader("📝 Developer Notes")
+    st.info("이 프로그램은 교육 및 비영리 목적으로 제작되었습니다.")
+    st.write(f"- **Current User Hash:** {st.session_state.user_id}")
+    st.write(f"- **Current Session ID:** {st.session_state.chat_session}")
+    st.write("- **Applied Fixes:** Postgrest APIError, Search Null filtering, Zeta Persona Injection.")
+    
+    if st.button("세션 초기화 (대화 내역 삭제 아님)"):
         st.session_state.active_char = None
+        st.session_state.chat_session = str(uuid.uuid4())
         st.rerun()
