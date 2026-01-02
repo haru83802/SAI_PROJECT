@@ -175,4 +175,4 @@ with tabs[4]:
         if st.form_submit_button("생성"):
             if n and i:
                 supabase.table("sai_characters").insert({"name": n, "instruction": i}).execute()
-                st.success(f"{n} 캐릭터 생성 완료!
+                st.success(f"{n} 캐릭터 생성 완료!")
