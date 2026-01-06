@@ -1,11 +1,10 @@
 import streamlit as st
 from supabase import create_client, Client
 from google import genai
+from google.genai import types
 import uuid
 
 # --- [0. 시스템 초기화] ---
-if "chat_sessions" not in st.session_state:
-    st.session_state.chat_sessions = {}
 if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
 
@@ -17,124 +16,121 @@ except Exception as e:
     st.error(f"연결 오류: {e}")
     st.stop()
 
-# --- [2. 사이드바 및 모델 선택] ---
+# --- [2. 함수: DB 데이터 로드/저장] ---
+def load_sessions():
+    """DB에서 모든 대화 목록을 가져옴"""
+    return supabase.table("chat_sessions").select("*").order("created_at", desc=True).execute().data
+
+def load_messages(sid):
+    """특정 세션의 대화 기록을 DB에서 가져옴"""
+    return supabase.table("chat_messages").select("*").eq("session_id", sid).order("created_at").execute().data
+
+def save_message(sid, role, content):
+    """메시지를 DB에 영구 저장"""
+    supabase.table("chat_messages").insert({
+        "session_id": sid,
+        "role": role,
+        "content": content
+    }).execute()
+
+# --- [3. 사이드바] ---
 with st.sidebar:
     st.title("🤖 SAI AI ENGINE")
     
-    # [수정] 모델별 특징에 따른 SAI 엔진 타입 선택
-    sai_type = st.radio(
-        "SAI 모드 설정",
-        ["BASIC", "PRO", "STORY", "ROLLPLAYING"],
-        help="각 모델은 기억력과 지시 이행력이 다릅니다."
-    )
-    
-    selected_model = st.selectbox(
-        "기반 모델(LLM)", 
-        ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
-    )
-    target_engine = selected_model.replace("models/", "")
+    sai_mode = st.radio("SAI 모드", ["BASIC", "PRO", "STORY", "ROLLPLAYING"])
+    selected_model = st.selectbox("엔진", ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"])
     
     st.divider()
-    st.subheader("📝 대화 목록")
-    for sid, data in st.session_state.chat_sessions.items():
-        if st.button(f"💬 {data['char_name']}", key=sid, use_container_width=True):
-            st.session_state.current_session_id = sid
+    st.subheader("📝 내 대화 기록")
+    sessions = load_sessions()
+    for s in sessions:
+        if st.button(f"💬 {s['char_name']}", key=s['id'], use_container_width=True):
+            st.session_state.current_session_id = s['id']
             st.rerun()
 
-    if st.button("➕ 새 대화 시작", use_container_width=True):
-        st.session_state.current_session_id = None
-        st.rerun()
-
-# --- [3. 메인 콘텐츠] ---
+# --- [4. 메인 콘텐츠] ---
 tabs = st.tabs(["💬 SAI 챗봇", "🔥 트렌드", "🛠️ 제작소"])
 
-# [채팅창 탭]
 with tabs[0]:
     sid = st.session_state.current_session_id
     if not sid:
-        st.info("👈 사이드바에서 대화방을 선택하거나 새 대화를 시작하세요.")
+        st.info("👈 사이드바에서 대화를 선택하거나 트렌드에서 캐릭터를 고르세요.")
     else:
-        chat = st.session_state.chat_sessions[sid]
+        # 현재 세션 정보 가져오기
+        current_session = supabase.table("chat_sessions").select("*").eq("id", sid).single().execute().data
         
-        # --- [추가] 실시간 캐릭터 설정 수정 (선택 지도) ---
-        with st.expander(f"⚙️ {chat['char_name']} 설정 수정 (실시간)", expanded=False):
-            new_inst = st.text_area("캐릭터 지침 수정", value=chat['instruction'], height=150)
-            if st.button("설정 반영하기"):
-                st.session_state.chat_sessions[sid]['instruction'] = new_inst
-                st.success("지침이 실시간으로 업데이트되었습니다!")
+        # [실시간 지침 수정]
+        with st.expander(f"⚙️ {current_session['char_name']} 설정 수정", expanded=False):
+            new_inst = st.text_area("현재 지침", value=current_session['instruction'], height=100)
+            if st.button("수정 내용 영구 반영"):
+                supabase.table("chat_sessions").update({"instruction": new_inst}).eq("id", sid).execute()
+                st.success("DB에 저장되었습니다.")
                 st.rerun()
-        
-        st.divider()
 
-        # 대화 기록 표시
-        if "messages" not in chat:
-            chat["messages"] = []
-        
-        for m in chat["messages"]:
+        # DB에서 대화 기록 불러오기 (영구 저장의 핵심)
+        messages = load_messages(sid)
+        for m in messages:
             with st.chat_message(m["role"]):
                 st.write(m["content"])
 
         if prompt := st.chat_input("메시지를 입력하세요..."):
-            chat["messages"].append({"role": "user", "content": prompt})
+            # 1. 사용자 메시지 표시 및 DB 저장
             with st.chat_message("user"):
                 st.write(prompt)
+            save_message(sid, "user", prompt)
             
-            # --- [수정] SAI 모델별 파라미터 분기 로직 ---
-            config_dict = {
+            # 2. AI 응답 생성
+            config_map = {
                 "BASIC": {"temp": 0.7, "top_p": 0.9},
-                "PRO": {"temp": 0.5, "top_p": 0.8},       # 낮은 온도 (정확성/참고율 업)
-                "STORY": {"temp": 1.0, "top_p": 0.95},    # 높은 온도 (창의성/스토리 업)
-                "ROLLPLAYING": {"temp": 0.9, "top_p": 1.0} # 자유로운 반응
+                "PRO": {"temp": 0.3, "top_p": 0.8},
+                "STORY": {"temp": 1.1, "top_p": 0.95},
+                "ROLLPLAYING": {"temp": 0.9, "top_p": 1.0}
             }
-            current_config = config_dict.get(sai_type)
+            conf = config_map[sai_mode]
+            
+            # 컨텍스트 구성을 위해 최근 메시지 로드
+            history = [{"role": m["role"], "parts": [m["content"]]} for m in messages[-15:]]
 
             try:
-                # 대화 컨텍스트 구성 (기억력 반영)
-                # Story 모델은 더 긴 기억력을 갖도록 history를 조절할 수 있습니다.
-                context_history = chat["messages"][-20:] if sai_type != "STORY" else chat["messages"][-50:]
-
                 response = client.models.generate_content(
-                    model=target_engine,
-                    contents=prompt,
-                    config={
-                        'system_instruction': chat['instruction'],
-                        'temperature': current_config['temp'],
-                        'top_p': current_config['top_p']
-                    }
+                    model=selected_model.split("/")[-1],
+                    contents=prompt, # 혹은 history를 포함한 복합 구성
+                    config=types.GenerateContentConfig(
+                        system_instruction=current_session['instruction'],
+                        temperature=conf['temp'],
+                        top_p=conf['top_p']
+                    )
                 )
                 ai_text = response.text
                 
-                chat["messages"].append({"role": "assistant", "content": ai_text})
+                # 3. AI 응답 표시 및 DB 저장
                 with st.chat_message("assistant"):
                     st.write(ai_text)
-                    
+                save_message(sid, "assistant", ai_text)
+                
             except Exception as e:
-                st.error(f"❌ 엔진 오류: {e}")
+                st.error(f"오류: {e}")
 
-# [트렌드/제작소 탭은 기존 코드와 동일하게 유지]
+# [트렌드 탭] 캐릭터 선택 시 새로운 세션 생성 로직
 with tabs[1]:
     st.header("🔥 인기 캐릭터")
-    # ... (기존 코드 유지)
-    try:
-        chars = supabase.table("sai_characters").select("*").execute().data
-        for char in chars:
-            if st.button(f"선택: {char['name']}", key=f"sel_{char['id']}"):
-                new_id = str(uuid.uuid4())
-                st.session_state.chat_sessions[new_id] = {
-                    "char_name": char['name'], 
-                    "instruction": char['instruction'],
-                    "messages": [] # 메시지 로그 초기화 추가
-                }
-                st.session_state.current_session_id = new_id
-                st.rerun()
-    except:
-        st.write("캐릭터를 불러올 수 없습니다.")
+    chars = supabase.table("sai_characters").select("*").execute().data
+    for char in chars:
+        if st.button(f"시작하기: {char['name']}", key=f"trend_{char['id']}"):
+            # 새로운 세션을 DB에 생성
+            new_session = supabase.table("chat_sessions").insert({
+                "char_name": char['name'],
+                "instruction": char['instruction']
+            }).execute()
+            st.session_state.current_session_id = new_session.data[0]['id']
+            st.rerun()
 
+# [제작소 탭] (기존과 동일)
 with tabs[2]:
     st.header("🛠️ 캐릭터 제작소")
     with st.form("make"):
         name = st.text_input("이름")
-        inst = st.text_area("AI 지침 (성격 등)")
-        if st.form_submit_button("생성"):
+        inst = st.text_area("지침")
+        if st.form_submit_button("저장"):
             supabase.table("sai_characters").insert({"name": name, "instruction": inst}).execute()
-            st.success("생성 완료!")
+            st.success("캐릭터가 등록되었습니다!")
