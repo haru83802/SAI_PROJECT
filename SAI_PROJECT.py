@@ -1,147 +1,144 @@
 import streamlit as st
-import sqlite3
-import os
-from datetime import datetime
+from supabase import create_client, Client
+import google.generativeai as genai
+import uuid
 
-# =====================
-# 기본 설정
-# =====================
+# =========================
+# 페이지 설정 (모바일 대응)
+# =========================
 st.set_page_config(
-    page_title="SAI",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    page_title="SAI Platform",
+    layout="wide"
 )
 
-DB_PATH = "sai.db"
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# =========================
+# Secrets
+# =========================
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
-# =====================
-# DB 유틸
-# =====================
-def get_db():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+# =========================
+# Clients
+# =========================
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+gemini = genai.GenerativeModel("gemini-pro")
 
-# =====================
-# 자체 AI (placeholder)
-# =====================
-def local_ai(prompt: str) -> str:
-    return f"[SAI Local AI 응답]\n\n{prompt}"
-
-# =====================
-# Gemini (API 키 필요)
-# =====================
-def gemini_ai(prompt: str) -> str:
-    # 실제 사용 시 google.generativeai 연동
-    return f"[Gemini 응답]\n\n{prompt}"
-
-# =====================
-# 세션 초기화
-# =====================
+# =========================
+# Session Init
+# =========================
 if "user_id" not in st.session_state:
-    st.session_state.user_id = 1  # 임시 로컬 유저
+    user = (
+        supabase
+        .table("users")
+        .select("id")
+        .limit(1)
+        .execute()
+    )
+
+    if user.data:
+        st.session_state.user_id = user.data[0]["id"]
+    else:
+        new_user = (
+            supabase
+            .table("users")
+            .insert({
+                "provider": "local",
+                "provider_id": str(uuid.uuid4()),
+                "display_name": "Guest"
+            })
+            .execute()
+        )
+        st.session_state.user_id = new_user.data[0]["id"]
 
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
 
-if "ai_mode" not in st.session_state:
-    st.session_state.ai_mode = "Local"
-
-# =====================
-# 사이드바
-# =====================
+# =========================
+# Sidebar
+# =========================
 with st.sidebar:
-    st.header("⚙️ 설정")
-    st.radio("AI 선택", ["Local", "Gemini"], key="ai_mode")
+    st.title("🧬 SAI PLATFORM")
+
+    ai_mode = st.radio(
+        "AI 엔진",
+        ["Gemini"],
+        horizontal=True
+    )
+
     st.divider()
+    st.subheader("내 대화")
 
-    uploaded = st.file_uploader("파일 업로드", accept_multiple_files=True)
-    if uploaded:
-        conn = get_db()
-        cur = conn.cursor()
-        for file in uploaded:
-            path = os.path.join(UPLOAD_DIR, file.name)
-            with open(path, "wb") as f:
-                f.write(file.read())
+    conversations = (
+        supabase
+        .table("conversations")
+        .select("id, title")
+        .eq("user_id", st.session_state.user_id)
+        .order("created_at", desc=True)
+        .execute()
+    ).data
 
-            cur.execute(
-                "INSERT INTO uploads (user_id, filename, filetype, path) VALUES (?, ?, ?, ?)",
-                (st.session_state.user_id, file.name, file.type, path)
-            )
-        conn.commit()
-        conn.close()
-        st.success("업로드 완료")
+    for c in conversations:
+        if st.button(c["title"] or f"대화 {c['id']}", key=str(c["id"])):
+            st.session_state.conversation_id = c["id"]
+            st.rerun()
 
-# =====================
-# 메인 UI
-# =====================
-st.title("SAI")
-
-# 새 대화 생성
-if st.button("➕ 새 대화"):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO conversations (user_id, title) VALUES (?, ?)",
-        (st.session_state.user_id, "새 대화")
-    )
-    st.session_state.conversation_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-
-# 대화 선택
-conn = get_db()
-cur = conn.cursor()
-cur.execute("SELECT id, title FROM conversations WHERE user_id=?", (st.session_state.user_id,))
-convs = cur.fetchall()
-conn.close()
-
-for cid, title in convs:
-    if st.button(title or f"대화 {cid}", key=f"c{cid}"):
-        st.session_state.conversation_id = cid
-
-# =====================
-# 메시지 영역
-# =====================
-if st.session_state.conversation_id:
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id",
-        (st.session_state.conversation_id,)
-    )
-    messages = cur.fetchall()
-    conn.close()
-
-    for role, content in messages:
-        with st.chat_message(role):
-            st.markdown(content)
-
-    prompt = st.chat_input("메시지를 입력하세요")
-
-    if prompt:
-        conn = get_db()
-        cur = conn.cursor()
-
-        cur.execute(
-            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'user', ?)",
-            (st.session_state.conversation_id, prompt)
+    if st.button("➕ 새 대화"):
+        conv = (
+            supabase
+            .table("conversations")
+            .insert({
+                "user_id": st.session_state.user_id,
+                "title": "새 대화"
+            })
+            .execute()
         )
-        conn.commit()
-
-        with st.spinner("🤍 SAI는 비영리 목적입니다.\n잠시만 기다려 주세요…"):
-            if st.session_state.ai_mode == "Gemini":
-                response = gemini_ai(prompt)
-            else:
-                response = local_ai(prompt)
-
-        cur.execute(
-            "INSERT INTO messages (conversation_id, role, content) VALUES (?, 'ai', ?)",
-            (st.session_state.conversation_id, response)
-        )
-        conn.commit()
-        conn.close()
-
+        st.session_state.conversation_id = conv.data[0]["id"]
         st.rerun()
-else:
-    st.info("새 대화를 시작하세요")
+
+# =========================
+# Main
+# =========================
+st.title("💬 SAI Chat")
+
+if not st.session_state.conversation_id:
+    st.info("대화를 선택하거나 새로 시작하세요.")
+    st.stop()
+
+messages = (
+    supabase
+    .table("messages")
+    .select("role, content")
+    .eq("conversation_id", st.session_state.conversation_id)
+    .order("created_at")
+    .execute()
+).data
+
+for msg in messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+user_input = st.chat_input("메시지를 입력하세요")
+
+if user_input:
+    # 사용자 메시지 저장
+    supabase.table("messages").insert({
+        "conversation_id": st.session_state.conversation_id,
+        "role": "user",
+        "content": user_input
+    }).execute()
+
+    with st.chat_message("assistant"):
+        with st.spinner("🤍 SAI는 비영리 목적입니다.\n잠시만 기다려 주세요…"):
+            response = gemini.generate_content(user_input).text
+            st.markdown(response)
+
+    # AI 메시지 저장
+    supabase.table("messages").insert({
+        "conversation_id": st.session_state.conversation_id,
+        "role": "assistant",
+        "content": response
+    }).execute()
+
+    st.rerun()
