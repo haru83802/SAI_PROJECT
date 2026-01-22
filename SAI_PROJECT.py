@@ -1,9 +1,3 @@
-import streamlit as st
-from supabase import create_client
-import google.generativeai as genai
-import requests
-import uuid
-
 # ---------------------------------
 # 기본 설정
 # ---------------------------------
@@ -185,3 +179,4 @@ if prompt:
     }).execute()
 
     st.rerun()
+
