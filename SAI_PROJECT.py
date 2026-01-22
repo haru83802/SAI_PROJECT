@@ -3,69 +3,53 @@ from supabase import create_client, Client
 import google.generativeai as genai
 import uuid
 
-# =========================
+# ======================
 # 페이지 설정 (모바일 대응)
-# =========================
+# ======================
 st.set_page_config(
-    page_title="SAI Platform",
+    page_title="SAI",
     layout="wide"
 )
 
-# =========================
+# ======================
 # Secrets
-# =========================
+# ======================
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
-# =========================
+# ======================
 # Clients
-# =========================
+# ======================
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 gemini = genai.GenerativeModel("gemini-pro")
 
-# =========================
+# ======================
 # Session Init
-# =========================
+# ======================
 if "user_id" not in st.session_state:
-    user = (
-        supabase
-        .table("users")
-        .select("id")
-        .limit(1)
-        .execute()
-    )
-
+    user = supabase.table("users").select("id").limit(1).execute()
     if user.data:
         st.session_state.user_id = user.data[0]["id"]
     else:
-        new_user = (
-            supabase
-            .table("users")
-            .insert({
-                "provider": "local",
-                "provider_id": str(uuid.uuid4()),
-                "display_name": "Guest"
-            })
-            .execute()
-        )
+        new_user = supabase.table("users").insert({
+            "provider": "local",
+            "provider_id": str(uuid.uuid4()),
+            "display_name": "Guest"
+        }).execute()
         st.session_state.user_id = new_user.data[0]["id"]
 
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
 
-# =========================
+# ======================
 # Sidebar
-# =========================
+# ======================
 with st.sidebar:
-    st.title("🧬 SAI PLATFORM")
+    st.title("🧬 SAI")
 
-    ai_mode = st.radio(
-        "AI 엔진",
-        ["Gemini"],
-        horizontal=True
-    )
+    st.caption("비영리 목적 AI 프로젝트")
 
     st.divider()
     st.subheader("내 대화")
@@ -85,25 +69,20 @@ with st.sidebar:
             st.rerun()
 
     if st.button("➕ 새 대화"):
-        conv = (
-            supabase
-            .table("conversations")
-            .insert({
-                "user_id": st.session_state.user_id,
-                "title": "새 대화"
-            })
-            .execute()
-        )
+        conv = supabase.table("conversations").insert({
+            "user_id": st.session_state.user_id,
+            "title": "새 대화"
+        }).execute()
         st.session_state.conversation_id = conv.data[0]["id"]
         st.rerun()
 
-# =========================
+# ======================
 # Main
-# =========================
+# ======================
 st.title("💬 SAI Chat")
 
 if not st.session_state.conversation_id:
-    st.info("대화를 선택하거나 새로 시작하세요.")
+    st.info("왼쪽에서 새 대화를 시작하세요.")
     st.stop()
 
 messages = (
@@ -122,7 +101,7 @@ for msg in messages:
 user_input = st.chat_input("메시지를 입력하세요")
 
 if user_input:
-    # 사용자 메시지 저장
+    # 유저 메시지 저장
     supabase.table("messages").insert({
         "conversation_id": st.session_state.conversation_id,
         "role": "user",
