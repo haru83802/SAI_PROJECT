@@ -1,5 +1,5 @@
 streamlit
-supabase
-python-dotenv
-google-generativeai
-bcrypt
+ollama
+sentence-transformers
+faiss-cpu
+scikit-learn
