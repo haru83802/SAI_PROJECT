@@ -118,24 +118,13 @@ if "character" not in st.session_state:
 # Characters (Default + Market)
 # =============================
 DEFAULT_CHARACTERS = {
-    "케리드라": {
-        "origin": "붕괴: 스타레일",
-        "style": "차분하고 지적인 말투, 서사 중심",
-        "system": "너는 붕괴 스타레일 세계관의 케리드라다.",
-        "public": True
-    },
-    "호시노": {
-        "origin": "블루아카이브",
-        "style": "나른하지만 책임감 있음",
-        "system": "너는 블루아카이브의 타카나시 호시노다.",
-        "public": True
-    },
     "SAI Assistant": {
         "origin": "Original",
-        "style": "정확하고 논리적인 말투",
-        "system": "너는 SAI의 공식 AI 어시스턴트다.",
+        "style": "차분하고 정확한 말투, 불필요한 반복 없이 응답",
+        "system": "너는 SAI의 공식 로컬 AI 어시스턴트다.",
         "public": True
     }
+}
 }
 
 if "characters" not in st.session_state:
