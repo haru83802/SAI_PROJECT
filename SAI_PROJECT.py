@@ -13,6 +13,76 @@ from typing import List, Dict
 st.set_page_config(page_title="SAI Local AI v2", page_icon="🧠", layout="wide")
 
 # =============================
+# =============================
+# UI Style (Premium Dark Chat UI)
+# =============================
+st.markdown("""
+<style>
+:root {
+  --bg: #0b0c10;
+  --panel: #14151a;
+  --user: linear-gradient(135deg,#6c5ce7,#8e7cff);
+  --ai: #1f2128;
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+}
+
+html, body, [class*="css"] {
+  background-color: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+.chat-user {
+  display:flex;
+  justify-content:flex-end;
+  padding:6px 0;
+}
+.chat-user .bubble {
+  background: var(--user);
+  color:white;
+  padding:14px 18px;
+  border-radius:22px 22px 6px 22px;
+  max-width:70%;
+  font-size:16px;
+  box-shadow:0 8px 24px rgba(0,0,0,.35);
+}
+
+.chat-ai {
+  display:flex;
+  justify-content:flex-start;
+  gap:10px;
+  padding:8px 0;
+}
+
+.chat-ai .bubble {
+  background: var(--ai);
+  color:var(--text);
+  padding:18px 20px;
+  border-radius:22px 22px 22px 6px;
+  max-width:72%;
+  font-size:16px;
+  line-height:1.7;
+  box-shadow:0 6px 20px rgba(0,0,0,.25);
+}
+
+.name-tag {
+  font-size:13px;
+  color:var(--muted);
+  margin-bottom:6px;
+}
+
+header, footer { visibility: hidden; }
+
+.stChatInput {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg), transparent);
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# =============================
 # Optional Supabase (API key based)
 # =============================
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
@@ -104,10 +174,24 @@ def update_memory(user, assistant):
 def local_ai(user_input: str, mode: str, char_name: str) -> str:
     char = st.session_state.characters[char_name]
 
+    # repetition guard
+    recent = " ".join([m["content"] for m in st.session_state.messages[-4:] if m["role"] == "assistant"])
+
+    base_prompt = f"너는 {char_name}다. 말투: {char['style']}. 모드: {mode}."
+
+    if user_input in recent:
+        tone = "같은 말을 반복하지 말고, 새로운 관점이나 감정을 추가해 응답하라."
+    else:
+        tone = "이전 맥락을 자연스럽게 이어가되 표현을 반복하지 말라."
+
     response = (
-        f"[{char_name} | {mode}]\n"
-        f"(기억 요약: {st.session_state.long_memory[-200:]})\n"
-        f"{user_input}에 대해 내 생각은 이래. 현재 맥락을 고려하면 가장 자연스러운 선택이야."
+        f"{base_prompt}
+"
+        f"기억 요약: {st.session_state.long_memory[-300:]}
+"
+        f"지침: {tone}
+"
+        f"응답: {user_input}에 대해 케리드라의 관점에서 상황과 감정을 발전시켜 말한다."
     )
     return response
 
@@ -163,8 +247,12 @@ st.caption("무료 · 로그인 없음 · 기억력 강화 · 캐릭터 마켓")
 for m in st.session_state.messages:
     if search and search not in m["content"]:
         continue
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+
+    if m["role"] == "user":
+        st.markdown(f"<div class='chat-user'><div class='bubble'>{m['content']}</div></div>", unsafe_allow_html=True)
+    else:
+        char = st.session_state.character
+        st.markdown(f"<div class='chat-ai'><div><div class='name-tag'>{char}</div><div class='bubble'>{m['content']}</div></div></div>", unsafe_allow_html=True)
 
 # Input
 user_input = st.chat_input("메시지를 입력하세요")
