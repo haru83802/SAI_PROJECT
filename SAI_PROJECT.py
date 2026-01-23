@@ -1,87 +1,69 @@
 # =============================
-# SAI LOCAL AI – FULL STABLE VERSION
-# =============================
-# - Login 없음
-# - 무료 사용 전제
-# - 반복 응답 방지
-# - 강화된 기억력
-# - 이미지 업로드
-# - 프리미엄 다크 UI
+# SAI LOCAL AI – STREAMLIT SITE
+# Single-file Version
 # =============================
 
 import streamlit as st
 import uuid
-from collections import deque
-from datetime import datetime
+import html
+
+import ollama
+import faiss
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # =============================
 # Page Config
 # =============================
 st.set_page_config(
-    page_title="SAI Project",
+    page_title="SAI Local AI",
     page_icon="🤖",
     layout="wide",
 )
 
-# ===== Theme Toggle =====
-if "theme" not in st.session_state:
-    st.session_state.theme = "dark"
+# =============================
+# CSS (Site UI)
+# =============================
+st.markdown(
+    """
+    <style>
+    body { background-color: #0e1117; color: #e6e6e6; }
+    header, footer { visibility: hidden; }
 
-with st.sidebar:
-    st.markdown("## ⚙️ 설정")
-    theme_toggle = st.toggle("다크 모드", value=(st.session_state.theme == "dark"))
-    st.session_state.theme = "dark" if theme_toggle else "light"
+    .chat-user{display:flex;justify-content:flex-end;padding:6px 0}
+    .chat-user .bubble{
+        background:linear-gradient(135deg,#6c5ce7,#8e7cff);
+        color:white;
+        padding:14px 18px;
+        border-radius:22px 22px 6px 22px;
+        max-width:70%;
+        word-break:break-word;
+    }
 
-if st.session_state.theme == "dark":
-    st.markdown(
-        """
-        <style>
-        body { background-color: #0e1117; color: #e6e6e6; }
-        .stApp { background-color: #0e1117; }
-        .stChatMessage { background-color: #161b22; border-radius: 12px; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-else:
-    st.markdown(
-        """
-        <style>
-        body { background-color: #ffffff; color: #000000; }
-        .stApp { background-color: #ffffff; }
-        .stChatMessage { background-color: #f3f4f6; border-radius: 12px; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    .chat-ai{display:flex;justify-content:flex-start;padding:6px 0}
+    .chat-ai .bubble{
+        background:#1f2128;
+        color:#e5e7eb;
+        padding:18px 20px;
+        border-radius:22px 22px 22px 6px;
+        max-width:72%;
+        line-height:1.6;
+        word-break:break-word;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # =============================
-# UI Style
+# Utility
 # =============================
-st.markdown("""
-<style>
-:root {
-  --bg: #0b0c10;
-  --user: linear-gradient(135deg,#6c5ce7,#8e7cff);
-  --ai: #1f2128;
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-}
-html, body, [class*="css"] {
-  background-color: var(--bg) !important;
-  color: var(--text) !important;
-}
-.chat-user{display:flex;justify-content:flex-end;padding:6px 0}
-.chat-user .bubble{background:var(--user);color:white;padding:14px 18px;border-radius:22px 22px 6px 22px;max-width:70%;box-shadow:0 8px 24px rgba(0,0,0,.35)}
-.chat-ai{display:flex;justify-content:flex-start;gap:10px;padding:8px 0}
-.chat-ai .bubble{background:var(--ai);color:var(--text);padding:18px 20px;border-radius:22px 22px 22px 6px;max-width:72%;line-height:1.7;box-shadow:0 6px 20px rgba(0,0,0,.25)}
-.name-tag{font-size:13px;color:var(--muted);margin-bottom:6px}
-header, footer{visibility:hidden}
-</style>
-""", unsafe_allow_html=True)
+def safe(text: str) -> str:
+    """XSS 방어"""
+    return html.escape(text)
 
 # =============================
-# Session State Init
+# Session Init
 # =============================
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -89,88 +71,125 @@ if "session_id" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "memory_vectors" not in st.session_state:
-    st.session_state.memory_vectors = deque(maxlen=50)
+if "embedder" not in st.session_state:
+    st.session_state.embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-if "long_memory" not in st.session_state:
-    st.session_state.long_memory = ""
-
-# =============================
-# Characters (ONLY ONE)
-# =============================
-DEFAULT_CHARACTERS = {
-    "SAI Assistant": {
-        "style": "차분하고 논리적이며 반복 없이 대화",
-        "system": "너는 SAI의 공식 로컬 AI 어시스턴트다.",
-    }
-}
-
-st.session_state.characters = DEFAULT_CHARACTERS
-st.session_state.character = "SAI Assistant"
+if "faiss_index" not in st.session_state:
+    dim = 384
+    st.session_state.faiss_index = faiss.IndexFlatL2(dim)
+    st.session_state.memory_texts = []
 
 # =============================
-# Memory Engine
+# Memory Functions
 # =============================
-def update_memory(user, assistant):
-    pair = f"USER:{user} ASSISTANT:{assistant}"
-    st.session_state.memory_vectors.append(pair)
-    joined = " ".join(st.session_state.memory_vectors)
-    st.session_state.long_memory = joined[-1500:]
+def add_memory(text: str):
+    vec = st.session_state.embedder.encode([text]).astype("float32")
+    st.session_state.faiss_index.add(vec)
+    st.session_state.memory_texts.append(text)
 
-# =============================
-# Local AI Engine (Non-repeating)
-# =============================
-def local_ai(user_input: str) -> str:
-    recent_ai = " ".join(
-        [m["content"] for m in st.session_state.messages[-4:] if m["role"] == "assistant"]
+def search_memory(query: str, k: int = 3) -> str:
+    if not st.session_state.memory_texts:
+        return ""
+    qvec = st.session_state.embedder.encode([query]).astype("float32")
+    _, idx = st.session_state.faiss_index.search(qvec, k)
+    return "\n".join(
+        st.session_state.memory_texts[i]
+        for i in idx[0]
+        if i < len(st.session_state.memory_texts)
     )
 
-    if user_input in recent_ai:
-        guide = "같은 말을 반복하지 말고 관점이나 감정을 발전시켜라."
-    else:
-        guide = "이전 대화를 자연스럽게 이어가라."
+def is_repeat(user_input: str, threshold: float = 0.88) -> bool:
+    if not st.session_state.memory_texts:
+        return False
+    vec = st.session_state.embedder.encode([user_input])
+    for past in st.session_state.memory_texts[-5:]:
+        pvec = st.session_state.embedder.encode([past])
+        sim = cosine_similarity(vec, pvec)[0][0]
+        if sim > threshold:
+            return True
+    return False
 
-    response = f"""
-[기억 요약]
-{st.session_state.long_memory[-300:]}
+# =============================
+# Local AI Engine (Ollama)
+# =============================
+def local_ai(user_input: str) -> str:
+    related_memory = search_memory(user_input)
 
-[지침]
-{guide}
+    system_prompt = (
+        "같은 내용을 반복하지 말고 새로운 관점으로 답하라."
+        if is_repeat(user_input)
+        else "차분하고 논리적인 AI 어시스턴트다."
+    )
 
-[응답]
-질문에 대해 새롭고 자연스럽게 대답한다.
+    prompt = f"""
+[관련 기억]
+{related_memory}
+
+[사용자 질문]
+{user_input}
+
+중복 없이 자연스럽게 대답하라.
 """
-    return response.strip()
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+    answer = res["message"]["content"]
+
+    add_memory(user_input)
+    add_memory(answer)
+
+    return answer
 
 # =============================
-# Sidebar – Image Upload
-# =============================
-st.sidebar.title("⚙️ 설정")
-with st.sidebar.expander("🖼 이미지 업로드"):
-    img = st.file_uploader("이미지 업로드", type=["png","jpg","jpeg"])
-    if img:
-        st.image(img, width=200)
-        st.session_state.messages.append({"role":"user","content":"[이미지 업로드]"})
-
-# =============================
-# Main UI
+# UI – Header
 # =============================
 st.title("🧠 SAI Local AI")
-st.caption("무료 · 로그인 없음 · 로컬 AI")
+st.caption("Streamlit 사이트 전용 · 로컬 AI · 로그인 없음")
 
+# =============================
+# UI – Chat History
+# =============================
 for m in st.session_state.messages:
     if m["role"] == "user":
-        st.markdown(f"<div class='chat-user'><div class='bubble'>{m['content']}</div></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='chat-user'><div class='bubble'>{safe(m['content'])}</div></div>",
+            unsafe_allow_html=True,
+        )
     else:
-        st.markdown(f"<div class='chat-ai'><div><div class='name-tag'>SAI Assistant</div><div class='bubble'>{m['content']}</div></div></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='chat-ai'><div class='bubble'>{safe(m['content'])}</div></div>",
+            unsafe_allow_html=True,
+        )
 
+# =============================
+# Input
+# =============================
 user_input = st.chat_input("메시지를 입력하세요")
 
 if user_input:
-    st.session_state.messages.append({"role":"user","content":user_input})
-    reply = local_ai(user_input)
-    update_memory(user_input, reply)
-    st.session_state.messages.append({"role":"assistant","content":reply})
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input}
+    )
+
+    with st.spinner("AI가 생각 중입니다..."):
+        reply = local_ai(user_input)
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": reply}
+    )
+
+    # UI 메시지 제한
+    st.session_state.messages = st.session_state.messages[-40:]
+
     st.rerun()
 
-st.caption("SAI는 비영리 목적입니다")
+# =============================
+# Footer
+# =============================
+st.caption("SAI는 비영리 로컬 AI 프로젝트입니다.")
